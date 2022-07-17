@@ -1,0 +1,6 @@
+[submodule "components/googletest"]
+	path = components/googletest
+	url = https://github.com/google/googletest
+[submodule "components/Unity"]
+	path = components/Unity
+	url = https://github.com/ThrowTheSwitch/Unity
