@@ -1,17 +1,17 @@
 /* MIT License
- * 
+ *
  * Copyright (c) 2022 Ningbo Peakhonor Technology Co., Limited
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +19,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.:0
- */ 
+ */
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
@@ -49,7 +49,7 @@ static void test_basic_prefix_handling(void)
     data[0] = 0x0D;
     actual = whisper_data_layer__data_received(data, 1);
     TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(STATE_FLAGS, state);
+    TEST_ASSERT_EQUAL(STATE_HEADER, state);
 }
 
 static void test_prefix_handling_with_incomplete_data(void)
@@ -70,109 +70,85 @@ static void test_prefix_handling_with_repeated_data(void)
     uint8_t data[] = {0x0A, 0x0A, 0x0D};
     char actual = whisper_data_layer__data_received(data, sizeof(data));
     TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(STATE_FLAGS, state);
+    TEST_ASSERT_EQUAL(STATE_HEADER, state);
     TEST_ASSERT_EQUAL(2, ring_buffer_size(receive_buf));
 }
 
-static void test_flags_handling(void)
+static void test_header_handling(void)
 {
-    // ack
-    state = STATE_FLAGS;
+    state = STATE_HEADER;
+    uint8_t data[] = {0x0A, 0x0D, 0x07, 0x00, 0x02, 0x03};
     ring_buffer_clear(receive_buf);
-    ring_buffer_push(receive_buf, (uint8_t[]){0x0A, 0x0D}, 2);
-    uint8_t data[] = {0x01};
-    char actual = whisper_data_layer__data_received(data, sizeof(data));
-    TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(STATE_PAYLOAD_LEN, state);
+    ring_buffer_push(receive_buf, data, 2);
 
-    // data
-    state = STATE_FLAGS;
-    ring_buffer_clear(receive_buf);
-    ring_buffer_push(receive_buf, (uint8_t[]){0x0A, 0x0D}, 2);
-    data[0] = 0x02;
-    actual = whisper_data_layer__data_received(data, sizeof(data));
-    TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(STATE_PAYLOAD_LEN, state);
-}
+    char actual = whisper_data_layer__data_received(&data[2], 3);
+    TEST_ASSERT_EQUAL(STATE_HEADER, state);
+    TEST_ASSERT_EQUAL(5, ring_buffer_size(receive_buf));
+    TEST_ASSERT_EQUAL(0, packet_header.seq_no);
 
-static void test_flags_handling_with_invalid_data(void)
-{
-    state = STATE_FLAGS;
-    ring_buffer_clear(receive_buf);
-    ring_buffer_push(receive_buf, (uint8_t[]){0x0A, 0x0D}, 2);
-    uint8_t data[] = {0x00};
-    char actual = whisper_data_layer__data_received(data, sizeof(data));
-    TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(STATE_PREFIX, state);
-}
-
-static void test_payload_len_handling(void)
-{
-    state = STATE_PAYLOAD_LEN;
-    ring_buffer_clear(receive_buf);
-    ring_buffer_push(receive_buf, (uint8_t[]){0x0A, 0x0D, 0x02}, 3);
-    uint8_t data[] = {0x08};
-    char actual = whisper_data_layer__data_received(data, sizeof(data));
-    TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(0x08, packet.payload_len);
+    actual = whisper_data_layer__data_received(&data[5], 1);
     TEST_ASSERT_EQUAL(STATE_PAYLOAD, state);
-}
-
-static void test_payload_len_handling_with_exccesive_payload_length(void)
-{
-    state = STATE_PAYLOAD_LEN;
-    ring_buffer_clear(receive_buf);
-    ring_buffer_push(receive_buf, (uint8_t[]){0x0A, 0x0D, 0x02}, 3);
-    uint8_t data[] = {0xFF};
-    char actual = whisper_data_layer__data_received(data, sizeof(data));
-    TEST_ASSERT_EQUAL(0, actual);
-    TEST_ASSERT_EQUAL(0x00, packet.payload_len);
-    TEST_ASSERT_EQUAL(STATE_PREFIX, state);
+    TEST_ASSERT_EQUAL(FLAGS_DATA, packet_header.flags);
+    TEST_ASSERT_EQUAL(0x07, packet_header.seq_no);
+    TEST_ASSERT_EQUAL(0x03, packet_header.payload_len);
 }
 
 static void test_payload_handling(void)
 {
     state = STATE_PAYLOAD;
-    uint8_t data[] = {0x0A, 0x0D, 0x02, 0x04, 0x01, 0x02, 0x04, 0x03};
-    ring_buffer_push(receive_buf, data, 4);
-    packet.payload_len = 4;
-    char actual = whisper_data_layer__data_received(&data[4], 2);
+    uint8_t data[] = {0x0A, 0x0D, 0x07, 0x00, 0x02, 0x04, 0x01, 0x02, 0x04, 0x03};
+    ring_buffer_push(receive_buf, data, LEN_PREFIX + LEN_HEADER);
+    packet_header.payload_len = 4;
+    char actual = whisper_data_layer__data_received(&data[LEN_PREFIX + LEN_HEADER], 2);
     TEST_ASSERT_EQUAL(0, actual);
     TEST_ASSERT_EQUAL(STATE_PAYLOAD, state);
-    TEST_ASSERT_EQUAL(0, packet.checksum);
 
     // Second trunk
-    actual = whisper_data_layer__data_received(&data[6], 2);
+    actual = whisper_data_layer__data_received(&data[LEN_PREFIX + LEN_HEADER + 2], 2);
     TEST_ASSERT_EQUAL(0, actual);
     TEST_ASSERT_EQUAL(STATE_CHECKSUM, state);
-    TEST_ASSERT_EQUAL(calculate_crc(data, sizeof(data)), packet.checksum);
 }
 
 static unsigned short data_received_length = 0;
+static uint8_t output_buf[128];
+static unsigned char output_buf_len = 0;
 static void test_checksum_handling(void)
 {
     state = STATE_CHECKSUM;
     data_received_length = 0;
+    uint8_t data[] = {0x0A, 0x0D, 0x0D, 0x00, 0x02, 0x02, 0x02, 0x03};
     ring_buffer_clear(receive_buf);
-    uint8_t data[] = {0x0A, 0x0D, 0x02, 0x02, 0x02, 0x03};
     ring_buffer_push(receive_buf, data, sizeof(data));
-    packet.payload_len = 2;
-    packet.flags = 0x02;
+    packet_header.seq_no = 0x0D;
+    packet_header.payload_len = 2;
+    packet_header.flags = 0x02;
     TEST_ASSERT_EQUAL(0, data_received_length);
 
     uint16_t checksum = calculate_crc(data, sizeof(data));
-    packet.checksum = checksum;
-    uint8_t *checksum_data = (uint8_t *)&checksum;
 
-    char actual = whisper_data_layer__data_received(checksum_data, 2);
+    output_buf_len = 0;
+    char actual = whisper_data_layer__data_received((uint8_t *)&checksum, 2);
     TEST_ASSERT_EQUAL(0, actual);
     TEST_ASSERT_EQUAL(STATE_PREFIX, state);
+    // the callback should be called, which indicates that the integrity of the packet is verified
     TEST_ASSERT_EQUAL(2, data_received_length);
+    // the packet should be acknowledged
+    TEST_ASSERT_EQUAL(LEN_PREFIX + LEN_HEADER + LEN_CHECKSUM + 2, output_buf_len);
+    TEST_ASSERT_EQUAL(0x0A, output_buf[0]);
+    TEST_ASSERT_EQUAL(0x01, output_buf[4]);
+    TEST_ASSERT_EQUAL(0x0D, output_buf[LEN_PREFIX + LEN_HEADER]);
+    TEST_ASSERT_EQUAL(0x00, output_buf[LEN_PREFIX + LEN_HEADER + 1]);
 }
 
 static void on_packet_received(unsigned char data_len)
 {
     data_received_length = data_len;
+}
+
+static void data_write(uint8_t *data, uint8_t data_len)
+{
+    memcpy(output_buf, data, data_len);
+    output_buf_len = data_len;
 }
 
 void setUp()
@@ -182,6 +158,7 @@ void setUp()
         .buf = _buf,
         .buf_len = _BUF_LEN,
         .packet_received_cb = on_packet_received,
+        .data_write = data_write,
     };
     whisper_data_layer__init(&cfg);
 }
@@ -195,11 +172,7 @@ int main(void)
     RUN_TEST(test_prefix_handling_with_incomplete_data);
     RUN_TEST(test_prefix_handling_with_repeated_data);
 
-    RUN_TEST(test_flags_handling);
-    RUN_TEST(test_flags_handling_with_invalid_data);
-
-    RUN_TEST(test_payload_len_handling);
-    RUN_TEST(test_payload_len_handling_with_exccesive_payload_length);
+    RUN_TEST(test_header_handling);
 
     RUN_TEST(test_payload_handling);
     RUN_TEST(test_checksum_handling);

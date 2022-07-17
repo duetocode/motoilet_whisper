@@ -91,3 +91,16 @@ unsigned short ring_buffer_batch_pop(ring_buffer_t rb, unsigned short count)
 
     return count;
 }
+
+unsigned short ring_buffer_read(unsigned char *dest, ring_buffer_t src, unsigned short offset, unsigned short count)
+{
+    if (count > src->size)
+        count = src->size;
+
+    for (unsigned short i = 0; i < count; ++i)
+    {
+        dest[i] = src->buf[(src->head + offset + i) % src->buf_len];
+    }
+
+    return count;
+}

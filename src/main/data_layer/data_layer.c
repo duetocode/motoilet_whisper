@@ -1,17 +1,17 @@
 /* MIT License
- * 
+ *
  * Copyright (c) 2022 Ningbo Peakhonor Technology Co., Limited
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -19,7 +19,7 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.:0
- */ 
+ */
 #include "data_layer.h"
 #include <assert.h>
 #include <string.h>
@@ -30,12 +30,12 @@
 // receive buffer for protocol handling
 ring_buffer_t receive_buf;
 
-struct whisper_data_layer__packet
+struct whisper_data_layer__packet_header
 {
+    unsigned short seq_no;
     unsigned char flags;
     unsigned char payload_len;
-    unsigned short int checksum;
-} packet;
+} packet_header;
 
 // flags of the packet flags byte
 #define FLAGS_ACK 0b00000001
@@ -45,25 +45,25 @@ struct whisper_data_layer__packet
 static const unsigned char PACKET_PREFIX[] = {0x0A, 0x0D};
 
 #define LEN_PREFIX sizeof(PACKET_PREFIX)
-#define LEN_HEADER 1 + 1
+#define LEN_HEADER sizeof(struct whisper_data_layer__packet_header)
 #define LEN_CHECKSUM 2
 
 // state of the the finite state machine
 #define STATE_PREFIX 0x00
-#define STATE_FLAGS 0x01
-#define STATE_PAYLOAD_LEN 0x02
-#define STATE_PAYLOAD 0x03
-#define STATE_CHECKSUM 0x04
+#define STATE_HEADER 0x01
+#define STATE_PAYLOAD 0x02
+#define STATE_CHECKSUM 0x03
 
 static unsigned char state;
 static unsigned char next_state;
 struct whisper_data_layer__config cfg;
+static unsigned short counter;
 
 static void transite(unsigned char new_state) { next_state = new_state; }
 
 static void reset(void)
 {
-    memset(&packet, 0, sizeof(packet));
+    memset(&packet_header, 0, sizeof(packet_header));
     transite(STATE_PREFIX);
 }
 
@@ -71,13 +71,13 @@ void whisper_data_layer__init(struct whisper_data_layer__config *config)
 {
     memcpy(&cfg, config, sizeof(struct whisper_data_layer__config));
     receive_buf = ring_buffer_create(config->buf, config->buf_len);
-    memset(&packet, 0, sizeof(packet));
+    memset(&packet_header, 0, sizeof(packet_header));
     state = STATE_PREFIX;
+    counter = 0;
 }
 
 static char handle_prefix(void);
-static char handle_flags(void);
-static char handle_payload_len(void);
+static char handle_header(void);
 static char handle_payload(void);
 static char handle_checksum(void);
 
@@ -92,11 +92,8 @@ static void process_buffered_data(void)
         case STATE_PREFIX:
             ret = handle_prefix();
             break;
-        case STATE_FLAGS:
-            ret = handle_flags();
-            break;
-        case STATE_PAYLOAD_LEN:
-            ret = handle_payload_len();
+        case STATE_HEADER:
+            ret = handle_header();
             break;
         case STATE_PAYLOAD:
             ret = handle_payload();
@@ -168,7 +165,7 @@ static char handle_prefix(void)
     if (num_of_matches == LEN_PREFIX)
     {
         // we found the whole prefix, move to the next state
-        transite(STATE_FLAGS);
+        transite(STATE_HEADER);
         // continue process the buffer
         return 1;
     }
@@ -179,16 +176,18 @@ static char handle_prefix(void)
     }
 }
 
-static char handle_flags(void)
+static char handle_header(void)
 {
-    assert(ring_buffer_size(receive_buf) >= LEN_PREFIX);
 
-    if (ring_buffer_size(receive_buf) == LEN_PREFIX)
-        // do not have enought data yet, stop processing
+    if (ring_buffer_size(receive_buf) < LEN_PREFIX + LEN_HEADER)
+        // stop processing if the header is not yet fully received
         return 0;
 
-    packet.flags = *ring_buffer_at(receive_buf, 2);
-    if (packet.flags < FLAGS_ACK || packet.flags > FLAGS_DATA)
+    // copy the header to the packet structure
+    ring_buffer_read((unsigned char *)&packet_header, receive_buf, LEN_PREFIX, LEN_HEADER);
+
+    // check the flags field
+    if (packet_header.flags < FLAGS_ACK || packet_header.flags > FLAGS_DATA)
     {
         // invalid flags, reset the state and pop
         reset();
@@ -197,26 +196,9 @@ static char handle_flags(void)
         return 1;
     }
 
-    // move to the next state
-    transite(STATE_PAYLOAD_LEN);
-
-    // continue processing the remaining data in the buffer
-    return 1;
-}
-
-static char handle_payload_len(void)
-{
-    assert(ring_buffer_size(receive_buf) >= LEN_PREFIX + 1);
-
-    if (ring_buffer_size(receive_buf) == LEN_PREFIX + 1)
-        // do not have enought data yet, stop processing
-        return 0;
-
-    packet.payload_len = *ring_buffer_at(receive_buf, 3);
-
-    // check if the data if too big for the buffer
-    if (packet.payload_len > ring_buffer_capacity(receive_buf) - LEN_PREFIX -
-                                 LEN_HEADER - LEN_CHECKSUM)
+    // check the payload length field
+    if (packet_header.payload_len >
+        ring_buffer_capacity(receive_buf) - LEN_PREFIX - LEN_HEADER - LEN_CHECKSUM)
     {
         reset();
         ring_buffer_pop(receive_buf);
@@ -224,8 +206,8 @@ static char handle_payload_len(void)
         return 1;
     }
 
+    // transite to payload state
     transite(STATE_PAYLOAD);
-    // continue to process the buffer
     return 1;
 }
 
@@ -234,44 +216,43 @@ static char handle_payload(void)
     unsigned short data_size = ring_buffer_size(receive_buf);
     assert(data_size >= LEN_PREFIX + LEN_HEADER);
 
-    unsigned short expected_size = LEN_PREFIX + LEN_HEADER + packet.payload_len;
+    unsigned short expected_size = LEN_PREFIX + LEN_HEADER + packet_header.payload_len;
 
-    if (data_size < LEN_PREFIX + LEN_HEADER + packet.payload_len)
+    if (data_size < LEN_PREFIX + LEN_HEADER + packet_header.payload_len)
         // do not have enought data yet, stop processing
         return 0;
 
-    // accumulated enough data, calculate the actual checksum and move to the next
-    // state calculate the checksum
-    unsigned short crc = CRC_INIT;
-    for (int i = 0; i < LEN_PREFIX + LEN_HEADER + packet.payload_len; ++i)
-    {
-        crc = update_crc(*ring_buffer_at(receive_buf, i), crc);
-    }
-    packet.checksum = crc;
-
-    // transite to checksum state
+    // accumulated enough data, transite to checksum state
     transite(STATE_CHECKSUM);
 
     // continue processing the buffer
     return 1;
 }
 
+static void ack(void);
+
 static char handle_checksum(void)
 {
-    unsigned short frame_length =
-        LEN_PREFIX + LEN_HEADER + packet.payload_len + LEN_CHECKSUM;
-    if (ring_buffer_size(receive_buf) < frame_length)
+    // the expected frame length
+    unsigned short expected_frame_length =
+        LEN_PREFIX + LEN_HEADER + packet_header.payload_len + LEN_CHECKSUM;
+
+    if (ring_buffer_size(receive_buf) < expected_frame_length)
         // do not have enought data yet, stop processing
         return 0;
 
-    // read the crc and check against the calculated one
-    unsigned short checksum =
-        *ring_buffer_at(receive_buf, frame_length - LEN_CHECKSUM);
-    checksum =
-        checksum | *ring_buffer_at(receive_buf, frame_length - LEN_CHECKSUM + 1)
-                       << 8;
+    // calculate the checksum of the frame
+    unsigned short actual_checksum = CRC_INIT;
+    for (int i = 0; i < LEN_PREFIX + LEN_HEADER + packet_header.payload_len; ++i)
+    {
+        actual_checksum = update_crc(*ring_buffer_at(receive_buf, i), actual_checksum);
+    }
 
-    if (checksum != packet.checksum)
+    // read the crc and check against the calculated one
+    unsigned short expected_checksum = 0;
+    ring_buffer_read((unsigned char *)&expected_checksum, receive_buf, LEN_PREFIX + LEN_HEADER + packet_header.payload_len, LEN_CHECKSUM);
+
+    if (expected_checksum != actual_checksum)
     {
         // checksum mismatch, reset the state and pop
         reset();
@@ -280,16 +261,42 @@ static char handle_checksum(void)
         return 1;
     }
 
-    // the frame is valid, report if this is a data frame
-    if (cfg.packet_received_cb && packet.flags & 0x02)
-        cfg.packet_received_cb(packet.payload_len);
+    if (packet_header.flags & FLAGS_DATA && cfg.packet_received_cb)
+    {
+        // dispatch data
+        cfg.packet_received_cb(packet_header.payload_len);
+        // acknowledge the packet
+        ack();
+    }
 
     // packet handling finished, reset the frame
     // pop the entire frame from the buffer
-    ring_buffer_batch_pop(receive_buf, frame_length);
+    ring_buffer_batch_pop(receive_buf, expected_frame_length);
     // set the state back to the prefix state
     reset();
 
     // continue processing the buffer
     return 1;
+}
+
+static void ack(void)
+{
+    assert((packet_header.flags & FLAGS_ACK) == 0);
+
+    unsigned char buf[LEN_PREFIX + LEN_HEADER + sizeof(unsigned short) + LEN_CHECKSUM] = {
+        PACKET_PREFIX[0],
+        PACKET_PREFIX[1],
+        counter & 0x00ff,
+        (counter & 0xff00) >> 8,
+        FLAGS_ACK,
+        2,
+        packet_header.seq_no & 0x00ff,
+        packet_header.seq_no >> 8,
+    };
+
+    unsigned short checksum = calculate_crc(buf, LEN_PREFIX + LEN_HEADER + sizeof(unsigned short));
+    buf[LEN_PREFIX + LEN_HEADER + sizeof(unsigned short)] = checksum & 0x00ff;
+    buf[LEN_PREFIX + LEN_HEADER + sizeof(unsigned short) + 1] = checksum >> 8;
+
+    cfg.data_write(buf, LEN_PREFIX + LEN_HEADER + LEN_CHECKSUM + 2);
 }

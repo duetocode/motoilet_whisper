@@ -37,6 +37,8 @@ struct whisper_data_layer__config
     void (*write)(unsigned char *buf, unsigned char buf_len);
     /** callback for parsed packet */
     void (*packet_received_cb)(unsigned char payload_len);
+    /** function pointer for sending data out*/
+    void (*data_write)(unsigned char *buf, unsigned char buf_len);
 };
 
 /** intialize the data layer with provided backend buffer */
