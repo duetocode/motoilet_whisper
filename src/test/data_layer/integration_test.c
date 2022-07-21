@@ -20,36 +20,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+#include <unity.h>
+#include <string.h>
+#include <stdlib.h>
 #include "crc.h"
+#include "data_layer.c"
 
-unsigned short update_crc(unsigned char val, unsigned short crc)
+static void common_test(void)
 {
-    unsigned short CRCLSB;
-    unsigned char j;
-    crc = crc ^ val;
-    for (j = 0; j < 8; j++)
-    {
-        CRCLSB = (unsigned short)(crc & 0x0001);
-        crc = (crc >> 1) & 0x7FFF;
-        if (CRCLSB == 1)
-        {
-            crc = crc ^ 0xA001;
-        }
-    }
-    return crc;
+    
 }
 
-unsigned short update_crc_buf(const unsigned char *buf, unsigned char len, unsigned short crc)
-{
-    unsigned short i;
-    for (i = 0; i < len; i++)
-    {
-        crc = update_crc(buf[i], crc);
-    }
-    return crc;
-}
+void setUp(void) {}
+void tearDown(void) {}
 
-unsigned short calculate_crc(const unsigned char *buf, unsigned short len)
+int main()
 {
-    return update_crc_buf(buf, len, CRC_INIT);
+    UNITY_BEGIN();
+
+    RUN_TEST(common_test);
+
+    return UNITY_END();
 }
