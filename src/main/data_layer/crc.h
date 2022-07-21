@@ -27,6 +27,5 @@
 
 unsigned short update_crc(unsigned char val, unsigned short crc);
 unsigned short update_crc_buf(const unsigned char *buf, unsigned char len, unsigned short crc);
-unsigned short calculate_crc(const unsigned char *buf, unsigned short len);
 
 #endif // CRC_H

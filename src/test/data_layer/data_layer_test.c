@@ -136,7 +136,7 @@ static void test_checksum_handling(void)
     TEST_ASSERT_EQUAL(FLAGS_DATA, packet_header->flags);
     TEST_ASSERT_EQUAL(0, data_received_length);
 
-    uint16_t checksum = calculate_crc(data, sizeof(data));
+    uint16_t checksum = update_crc_buf(data, sizeof(data), CRC_INIT);
 
     output_buf_len = 0;
     char actual = whisper_data_layer__data_received((uint8_t *)&checksum, 2);

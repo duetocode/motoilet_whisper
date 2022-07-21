@@ -331,7 +331,7 @@ static void ack(void)
         packet_header->seq_no >> 8,
     };
 
-    uint16_t checksum = calculate_crc(buf, LEN_PREFIX + LEN_HEADER + sizeof(uint16_t));
+    uint16_t checksum = update_crc_buf(buf, LEN_PREFIX + LEN_HEADER + sizeof(uint16_t), CRC_INIT);
     buf[LEN_PREFIX + LEN_HEADER + sizeof(uint16_t)] = checksum & 0x00ff;
     buf[LEN_PREFIX + LEN_HEADER + sizeof(uint16_t) + 1] = checksum >> 8;
 

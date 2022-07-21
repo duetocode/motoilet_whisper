@@ -48,8 +48,3 @@ unsigned short update_crc_buf(const unsigned char *buf, unsigned char len, unsig
     }
     return crc;
 }
-
-unsigned short calculate_crc(const unsigned char *buf, unsigned short len)
-{
-    return update_crc_buf(buf, len, CRC_INIT);
-}
